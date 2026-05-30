@@ -41,14 +41,31 @@ rather than turning it into a plain text edit.
 - Operate on **one form per run**: the matching `<Name>U.dfm` and `<Name>U.pas` pair. Edit
   both files together and keep them consistent — every `.dfm` `object` has a field of the
   same name and type in the form's `type` declaration, and vice versa.
-- Make changes on the same rows in the `.dfm` and `.pas` files where possible, to keep the
-  diff clean and reviewable.
+- **Convert each control in place — same rows, no relocation.** Overwrite the control's
+  existing `object … end` block *where it already sits*; never move, reorder, regroup, or
+  re-emit it elsewhere. Mechanically this is a **single replacement of that one block** —
+  not a delete here plus an add somewhere else. Change only the class name, the inner
+  properties, and the data binding. Inner property lines may shift within the object, but
+  the object/field block stays where it was, so the diff reads as a clean in-place
+  replacement on the original rows. The same applies in the `.pas`: change only the class
+  token on the existing field line; never move the field.
 - **Preserve existing component names and event-handler method names** so wired handlers
   keep working. Do not rename `edt_Naseleno`, `edt_FamiliaKeyPress`, etc.
-- When unsure about property style or ordering, **diff against an already-converted form**
-  (grep for `TcxDBTextEdit` / `TcxTextEdit`) rather than guessing.
+- When unsure about property style or property ordering, **diff against an already-converted
+  form** (grep for `TcxDBTextEdit` / `TcxTextEdit`) rather than guessing — but use it as a
+  reference for **property style, within-object property ordering, and `Properties.*`
+  mappings only, never for where the object lives**. Those forms were produced the legacy
+  way, with converted controls re-emitted at the **end** of the list; you keep yours in
+  place on the same rows.
 
 ## Transformation — in the `.dfm` (per edit)
+
+**Edit mechanics — in place.** Convert each edit by a *single replacement of its existing
+`object … end` block* — match the block where it already sits and overwrite it there. Do
+**not** delete the edit and emit a new `object` for it anywhere else (the end of the
+container's control list, just before the non-visual components, etc.). The objects
+immediately above and below the converted block stay byte-for-byte unchanged. The numbered
+steps below describe what the in-place replacement block contains.
 
 1. Change the class: `TEdit` → `TcxTextEdit`, `TDBEdit` → `TcxDBTextEdit`,
    `TMemo` → `TcxMemo`, `TDBMemo` → `TcxDBMemo`.
@@ -76,56 +93,72 @@ rather than turning it into a plain text edit.
    - `MaxLength = n`          → `Properties.MaxLength = n`
    - `PasswordChar`, `ReadOnly`, etc. → the corresponding `Properties.*`
    Preserve behavior — do **not** silently drop these.
-6. Re-emit the converted object at the **END** of its parent container's visual-control
-   list — after the other visual controls and before non-visual components such as
-   `TFDQuery` / `TDataSource`. This mirrors how the Delphi/DevExpress IDE serializes
-   windowed controls (a graphic `TLabel`/`TDBText` is not windowed and stays where it is).
+6. **Leave the object where it is — do not move it within its parent container's component
+   list.** Edit it in place so the converted control stays on the same rows as the original.
 
-### Canonical before → after (commit `2d3bf94f`)
-```
-object edt_Naseleno: TDBEdit              object edt_Naseleno: TcxDBTextEdit
-  Left = 86                                 Left = 86
-  Top = 47                                  Top = 47
-  Width = 134                               DataBinding.DataField = 'Naseleno'
-  Height = 23                               DataBinding.DataSource = ds_Sobst
-  CharCase = ecUpperCase                    TabOrder = 2
-  DataField = 'Naseleno'                    Properties.CharCase = ecUpperCase
-  DataSource = ds_Sobst                     OnKeyPress = edt_FamiliaKeyPress
-  TabOrder = 2                              Width = 134
-  OnKeyPress = edt_FamiliaKeyPress        end
-end
-```
-(`Width` last, `Height` gone, binding rewritten to `DataBinding.*`, object moved to the
-end of its tab sheet's controls. Note: that commit dropped `CharCase`; per this skill it
-is preserved as `Properties.CharCase` and flagged.)
+### Canonical before → after — shown as an in-place diff
 
-**`OnChange` moves to `Properties` (commit `66ba3fb8`, `SobstEditU.dfm`):**
+The conversion is a same-rows replacement of the object's block. Below is the verified
+`edt_Razdane` conversion in `SobstEditU.dfm`; the neighbour `cb_InVedom` directly after it
+is **untouched** — the block changes class and properties *where it sits*:
+
 ```
-OnChange = edt_BegDateChange   →   Properties.OnChange = edt_BegDateChange
+       end
+-      object edt_Razdane: TDBEdit
++      object edt_Razdane: TcxDBTextEdit
+         Left = 129
+         Top = 97
+-        Width = 73
+-        Height = 23
+-        DataField = 'LN4_DataRazdane'
+-        DataSource = ds_Sobst
++        DataBinding.DataField = 'LN4_DataRazdane'
++        DataBinding.DataSource = ds_Sobst
+         TabOrder = 6
++        Width = 73
+       end
+       object cb_InVedom: TCheckBox        <- unchanged, still immediately after
 ```
 
-### Memo before → after (`TDBMemo` → `TcxDBMemo`)
+A correct conversion **never** shows a removed `object … end` in one place and an added one
+elsewhere. Here `Width` became the last property, `Height` was dropped (single-line edit),
+and the binding moved to `DataBinding.*`.
+
+Properties that don't transfer 1:1 land on `Properties.*` **inside the same block**, e.g.
+`CharCase = ecUpperCase` → `Properties.CharCase = ecUpperCase`, and
+`OnChange = edt_BegDateChange` → `Properties.OnChange = edt_BegDateChange`
+(commit `66ba3fb8`, `SobstEditU.dfm`).
+
+### Memo before → after — in-place diff (`TDBMemo` → `TcxDBMemo`)
+
+Same as an edit **except `Height` is kept** — a memo is multi-line and its height is real
+layout. Verified `edt_Adres` conversion in `SobstEditU.dfm`, again in place:
+
 ```
-object edt_Adres: TDBMemo                 object edt_Adres: TcxDBMemo
-  Left = 16                                 Left = 16
-  Top = 304                                 Top = 304
-  Width = 407                               DataBinding.DataField = 'Adres'
-  Height = 50                               DataBinding.DataSource = ds_Izp
-  DataField = 'Adres'                       TabOrder = 15
-  DataSource = ds_Izp                       Height = 50
-  TabOrder = 15                             Width = 407
-end                                       end
+-      object edt_Adres: TDBMemo
++      object edt_Adres: TcxDBMemo
+         Left = 86
+         Top = 74
+-        Width = 354
+-        Height = 41
+-        DataField = 'Adres'
+-        DataSource = ds_Sobst
++        DataBinding.DataField = 'Adres'
++        DataBinding.DataSource = ds_Sobst
+         TabOrder = 4
+         OnKeyPress = edt_AdresKeyPress
++        Height = 41
++        Width = 354
+       end
 ```
-(Same as an edit **except `Height = 50` is kept** — a memo is multi-line. `Width`
-still last; binding rewritten to `DataBinding.*`.)
+(`Height` **and** `Width` kept, `Width` last; binding rewritten to `DataBinding.*`.)
 
 ## Transformation — in the `.pas`
 
 1. In the form's `type` block, change the field's class (`TEdit`→`TcxTextEdit`,
    `TDBEdit`→`TcxDBTextEdit`, `TMemo`→`TcxMemo`, `TDBMemo`→`TcxDBMemo`) and **keep the
-   name**. Move the declaration to mirror the `.dfm` reorder — group the converted
-   fields with the other already-converted cx edits, just before the `procedure`
-   declarations.
+   name**. Leave the declaration in its original position — do not move or regroup it, so
+   the change stays on the same row.
 2. **No handler changes.** Events are preserved by name (including the one moved to
    `Properties.OnChange`), so do not add, rename, or delete any event-handler
    declaration or body.
@@ -142,6 +175,13 @@ still last; binding rewritten to `DataBinding.*`.)
 
 Before finishing, verify:
 
+- **In-place diff (do this first).** Run `git diff -- <Form>U.dfm <Form>U.pas`. Every
+  converted control must appear as a **single in-place hunk** — the `object`/field line
+  changes class while the objects around it stay byte-for-byte unchanged. If a control shows
+  up as a removed `object … end` block in one hunk and an added block in another (moved to
+  the end of the list, or anywhere else), it was **relocated**: undo the move and redo it as
+  an in-place block replacement. Same-row, in-place editing is a hard requirement, not
+  "where possible."
 - Every `.dfm` `object` has a matching `.pas` field of the same name **and** type, and
   every field has a matching object.
 - None of the converted controls remain `TEdit`/`TDBEdit`/`TMemo`/`TDBMemo`; no
@@ -161,9 +201,13 @@ Then report a short summary:
 
 ## Reference commits (canonical examples)
 
+Diff these for **property-level style only** — they predate the in-place rule and
+re-emitted converted controls at the end of the list, so ignore what they show for object
+positioning; convert in place on the same rows regardless.
+
 - `2d3bf94f` — plain `TDBEdit` (`edt_Naseleno`) → `TcxDBTextEdit`: binding rewrite,
-  `Width` last, `Height` dropped, object re-emitted at end of the tab sheet, field
-  reordered in the `.pas`.
+  `Width` last, `Height` dropped (the commit also re-emitted the object at the end of the
+  tab sheet and reordered the `.pas` field — **do not** copy that; convert in place).
 - `66ba3fb8` — `SobstEditU`: converted `TcxTextEdit`s carry their change event as
   `Properties.OnChange = …` (e.g. `edt_BegDate`, `edt_EndDate`) — the canonical
   `OnChange → Properties.OnChange` move.
