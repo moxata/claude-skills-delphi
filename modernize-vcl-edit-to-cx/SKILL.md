@@ -166,8 +166,13 @@ Combo boxes follow the same in-place rule as edits, with these differences:
 4. Move `Items.Strings = (...)` → `Properties.Items.Strings = (...)`.
    Drop the `Text = ...` line (it duplicates the `ItemIndex` selection and is not
    used by `TcxComboBox`).
-5. Keep `ItemIndex` if present — it is a direct property on `TcxComboBox` and stays
-   at the control level (not under `Properties`).
+5. **`ItemIndex` — keep in DFM, but place it after `Properties.Items.Strings`.**
+   The Delphi streaming system applies properties in DFM order. If `ItemIndex` appears
+   before the items are loaded it is silently discarded and the IDE drops it on next
+   save. Always emit `ItemIndex` **after** `Properties.Items.Strings`.
+   - Keep `ItemIndex` if the original value is `≥ 0` (i.e., something was selected).
+   - Drop `ItemIndex` only if the original value was `-1` (nothing selected — that is
+     the `TcxComboBox` default and does not need to be written).
 6. Rewrite data binding for DB combos (same as DB edits):
    `DataField = 'X'` → `DataBinding.DataField = 'X'`,
    `DataSource = Y`  → `DataBinding.DataSource = Y`.
@@ -179,11 +184,11 @@ Combo boxes follow the same in-place rule as edits, with these differences:
 object cb_Foo: TcxComboBox
   Left = …
   Top = …
-  ItemIndex = …                          ← only if originally set
   Properties.DropDownListStyle = lsFixedList
   Properties.Items.Strings = (           ← only if originally had Items.Strings
     '…'
     '…')
+  ItemIndex = …                          ← AFTER Items.Strings; omit only if was -1
   Properties.OnChange = cb_FooChange     ← only if originally had OnChange
   TabOrder = …
   Width = …
@@ -270,8 +275,9 @@ Before finishing, verify:
 - No converted control still has a control-level `OnChange` — it must be
   `Properties.OnChange`.
 - Combo boxes: no `Style = csDropDownList`, no bare `Items.Strings` (must be
-  `Properties.Items.Strings`), no bare `Text = …` line. Code references `.Items.*`
-  updated to `.Properties.Items.*`.
+  `Properties.Items.Strings`), no bare `Text = …` line. `ItemIndex` is present and
+  placed **after** `Properties.Items.Strings` (omitted only if original was `-1`).
+  Code references `.Items.*` updated to `.Properties.Items.*`.
 - Required units are present in `uses` with no duplicates (`cxMemo` when a memo was
   converted; `cxDBEdit` when any DB control was converted; `cxDropDownEdit` when any
   `TComboBox` was converted).
