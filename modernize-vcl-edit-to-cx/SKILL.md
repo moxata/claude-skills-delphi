@@ -1,17 +1,19 @@
 ---
 name: modernize-vcl-edit-to-cx
-description: Convert plain VCL text edits and memos in a Delphi form (.dfm + .pas) to DevExpress (cx) editors — TEdit to TcxTextEdit, TDBEdit to TcxDBTextEdit, TMemo to TcxMemo, and TDBMemo to TcxDBMemo — preserving name, position, exact size, tab order, events, dataset and field name. Use when asked to "modernize", "skin", or convert the "TEdit"/"TDBEdit"/"TMemo"/"TDBMemo"/text/memo fields of a VCL form. For an edit that has an image-only browse button beside it, or for buttons, use the sibling skill modernize-vcl-to-devexpress instead.
+description: Convert plain VCL text edits, memos, and combo boxes in a Delphi form (.dfm + .pas) to DevExpress (cx) editors — TEdit to TcxTextEdit, TDBEdit to TcxDBTextEdit, TMemo to TcxMemo, TDBMemo to TcxDBMemo, TComboBox to TcxComboBox, TDBComboBox to TcxDBComboBox — preserving name, position, exact size, tab order, events, dataset and field name. Use when asked to "modernize", "skin", or convert the "TEdit"/"TDBEdit"/"TMemo"/"TDBMemo"/text/memo fields of a VCL form. For an edit that has an image-only browse button beside it, or for buttons, use the sibling skill modernize-vcl-to-devexpress instead.
 ---
 
 # Modernize plain VCL edits → DevExpress (cx) text editors
 
-Convert the plain text edits of a single Delphi form to their DevExpress (`cx`)
-equivalents, matching the established "skin" style of this codebase:
+Convert the plain text edits, memos, and combo boxes of a single Delphi form to their
+DevExpress (`cx`) equivalents, matching the established "skin" style of this codebase:
 
 - Unbound `TEdit`  → **`TcxTextEdit`**
 - Data-bound `TDBEdit` → **`TcxDBTextEdit`**
 - Unbound `TMemo`  → **`TcxMemo`**
 - Data-bound `TDBMemo` → **`TcxDBMemo`**
+- Unbound `TComboBox` → **`TcxComboBox`**
+- Data-bound `TDBComboBox` → **`TcxDBComboBox`**
 
 Preserve each control's **name, position (`Left`/`Top`), exact size (`Width`), tab order,
 all events, and its dataset + field name**. Font/UI refresh (Tahoma→Segoe UI, sizes,
@@ -31,7 +33,7 @@ treatment as an edit except its `Height` is real layout and is **kept** (see the
   edit.Width`, same `Top`) → that becomes `TcxButtonEdit`/`TcxDBButtonEdit` there.
 - All button conversions (`TBitBtn`/`TSpeedButton`/`TButton` → `TcxButton`).
 
-**Out of scope — leave alone:** `TComboBox`/`TDBComboBox`, `TDBText`, `TLabel`,
+**Out of scope — leave alone:** `TDBText`, `TLabel`,
 `TRadioButton`, `TCheckBox`/`TDBCheckBox`. Do **not** auto-convert obvious date fields:
 a `TcxDBDateEdit` exists but is a different mapping — **flag** any date field for the user
 rather than turning it into a plain text edit.
@@ -153,6 +155,79 @@ layout. Verified `edt_Adres` conversion in `SobstEditU.dfm`, again in place:
 ```
 (`Height` **and** `Width` kept, `Width` last; binding rewritten to `DataBinding.*`.)
 
+## Transformation — combo boxes (`TComboBox` / `TDBComboBox`)
+
+Combo boxes follow the same in-place rule as edits, with these differences:
+
+1. Change the class: `TComboBox` → `TcxComboBox`, `TDBComboBox` → `TcxDBComboBox`.
+2. **Drop** `Style = csDropDownList` and `Height = 23`.
+   Replace with `Properties.DropDownListStyle = lsFixedList`.
+3. Move `OnChange = X` → `Properties.OnChange = X` (same rule as for edits).
+4. Move `Items.Strings = (...)` → `Properties.Items.Strings = (...)`.
+   Drop the `Text = ...` line (it duplicates the `ItemIndex` selection and is not
+   used by `TcxComboBox`).
+5. Keep `ItemIndex` if present — it is a direct property on `TcxComboBox` and stays
+   at the control level (not under `Properties`).
+6. Rewrite data binding for DB combos (same as DB edits):
+   `DataField = 'X'` → `DataBinding.DataField = 'X'`,
+   `DataSource = Y`  → `DataBinding.DataSource = Y`.
+7. Emit `Width` as the **last** property. Drop `Height`.
+
+**Canonical property order inside the converted block:**
+
+```
+object cb_Foo: TcxComboBox
+  Left = …
+  Top = …
+  ItemIndex = …                          ← only if originally set
+  Properties.DropDownListStyle = lsFixedList
+  Properties.Items.Strings = (           ← only if originally had Items.Strings
+    '…'
+    '…')
+  Properties.OnChange = cb_FooChange     ← only if originally had OnChange
+  TabOrder = …
+  Width = …
+end
+```
+
+**In the `.pas` — code references:**
+Anywhere the code calls `.Items.Count` or `.Items.Add(…)` / `.Items.Clear` on a
+converted combo, update to `.Properties.Items.Count`, `.Properties.Items.Add(…)`,
+`.Properties.Items.Clear`. Properties accessed directly (`ItemIndex`, `Visible`,
+`Enabled`, `SetFocus`, `Clear` for text) stay as-is.
+
+### Combo box before → after — in-place diff
+
+Verified `cb_FlagCertificate` conversion in `NewEObezFormU.dfm`
+(commits `f74cab1d`, `ca406be4`):
+
+```
+-  object cb_FlagCertificate: TComboBox
++  object cb_FlagCertificate: TcxComboBox
+     Left = 24
+     Top = 177
+-    Width = 409
+-    Height = 23
+-    Style = csDropDownList
+     ItemIndex = 0
+-    TabOrder = 3
+-    Text = '1 - …'
+-    OnChange = cb_FlagCertificateChange
+-    Items.Strings = (
+-      '1 - …'
+-      '2 - …'
+-      '3 - …')
++    Properties.DropDownListStyle = lsFixedList
++    Properties.Items.Strings = (
++      '1 - …'
++      '2 - …'
++      '3 - …')
++    Properties.OnChange = cb_FlagCertificateChange
++    TabOrder = 3
++    Width = 409
+   end
+```
+
 ## Transformation — in the `.pas`
 
 1. In the form's `type` block, change the field's class (`TEdit`→`TcxTextEdit`,
@@ -167,9 +242,13 @@ layout. Verified `edt_Adres` conversion in `SobstEditU.dfm`, again in place:
    `cxControls, cxContainer, cxEdit, cxTextEdit, cxMaskEdit`
    and — when any `TDBEdit`/`TDBMemo` was converted — also `cxDBEdit`
    (`TcxDBMemo` is declared there, same as `TcxDBTextEdit`),
-   and — when any `TMemo`/`TDBMemo` was converted — also `cxMemo`.
-   (Forms already partly skinned with cx button-edits usually have these already; adding
-   them is then a no-op.)
+   and — when any `TMemo`/`TDBMemo` was converted — also `cxMemo`,
+   and — when any `TComboBox` was converted — also `cxDropDownEdit`
+   (`TcxComboBox` is declared there),
+   and — when any `TDBComboBox` was converted — also `cxDBEdit`
+   (`TcxDBComboBox` is declared there, same as `TcxDBTextEdit`).
+   (Forms already partly skinned with cx controls usually have some of these already;
+   adding them is then a no-op.)
 
 ## Final self-check & report
 
@@ -184,13 +263,18 @@ Before finishing, verify:
   "where possible."
 - Every `.dfm` `object` has a matching `.pas` field of the same name **and** type, and
   every field has a matching object.
-- None of the converted controls remain `TEdit`/`TDBEdit`/`TMemo`/`TDBMemo`; no
-  converted control still carries `DataField` or `DataSource` (must be
-  `DataBinding.*`). `Height` is **dropped** on single-line edits but **kept** on memos.
+- None of the converted controls remain `TEdit`/`TDBEdit`/`TMemo`/`TDBMemo`/
+  `TComboBox`/`TDBComboBox`; no converted control still carries bare `DataField` or
+  `DataSource` (must be `DataBinding.*`). `Height` is **dropped** on single-line edits
+  and combo boxes, but **kept** on memos.
 - No converted control still has a control-level `OnChange` — it must be
   `Properties.OnChange`.
+- Combo boxes: no `Style = csDropDownList`, no bare `Items.Strings` (must be
+  `Properties.Items.Strings`), no bare `Text = …` line. Code references `.Items.*`
+  updated to `.Properties.Items.*`.
 - Required units are present in `uses` with no duplicates (`cxMemo` when a memo was
-  converted; `cxDBEdit` when any DB control was converted).
+  converted; `cxDBEdit` when any DB control was converted; `cxDropDownEdit` when any
+  `TComboBox` was converted).
 
 Then report a short summary:
 - Which controls were converted (old → new type, with name), including memos.
@@ -214,3 +298,8 @@ positioning; convert in place on the same rows regardless.
 - `be1cc14e` — **out-of-scope boundary**: an edit *with* an ellipsis `TSpeedButton`
   (`edt_Oblast`) → `TcxDBButtonEdit`. If you see that pattern, hand off to
   `modernize-vcl-to-devexpress`.
+- `f74cab1d` — `NewEObezFormU`: `cb_VidUdost: TComboBox` → `TcxComboBox`; adds
+  `cxDropDownEdit` to `uses`; `Style` removed, `Properties.DropDownListStyle = lsFixedList`,
+  `OnChange` moved to `Properties.OnChange`.
+- `ca406be4` — `NewEObezFormU` fix: `.Items.Count` → `.Properties.Items.Count`,
+  `.Items.Add(…)` → `.Properties.Items.Add(…)` in code after the combo conversion above.
