@@ -164,13 +164,19 @@ Combo boxes follow the same in-place rule as edits, with these differences:
    Replace with `Properties.DropDownListStyle = lsFixedList`.
 3. Move `OnChange = X` → `Properties.OnChange = X` (same rule as for edits).
 4. Move `Items.Strings = (...)` → `Properties.Items.Strings = (...)`.
-   Drop the `Text = ...` line (it duplicates the `ItemIndex` selection and is not
-   used by `TcxComboBox`).
-5. **`ItemIndex` — keep in DFM, but place it after `Properties.Items.Strings`.**
+   **`Text` — derive from `Items[ItemIndex]` when a selection exists:**
+   - When the original `ItemIndex ≥ 0`, emit `Text = '<Items[ItemIndex]>'`
+     immediately after `ItemIndex` in the converted block. Look up the string at
+     that position in the original `Items.Strings` list and use it verbatim.
+   - When the original `ItemIndex = -1` (nothing selected), drop `Text` entirely.
+   - Never copy the old `Text = …` line verbatim — it may be stale or wrong;
+     always derive it from `Items[ItemIndex]`.
+5. **`ItemIndex` — keep in DFM at all costs, but place it after `Properties.Items.Strings`.**
    The Delphi streaming system applies properties in DFM order. If `ItemIndex` appears
    before the items are loaded it is silently discarded and the IDE drops it on next
    save. Always emit `ItemIndex` **after** `Properties.Items.Strings`.
    - Keep `ItemIndex` if the original value is `≥ 0` (i.e., something was selected).
+     **This is mandatory — never drop a non-(-1) `ItemIndex`.**
    - Drop `ItemIndex` only if the original value was `-1` (nothing selected — that is
      the `TcxComboBox` default and does not need to be written).
 6. Rewrite data binding for DB combos (same as DB edits):
@@ -189,6 +195,7 @@ object cb_Foo: TcxComboBox
     '…'
     '…')
   ItemIndex = …                          ← AFTER Items.Strings; omit only if was -1
+  Text = '…'                             ← Items[ItemIndex]; omit only if ItemIndex was -1
   Properties.OnChange = cb_FooChange     ← only if originally had OnChange
   TabOrder = …
   Width = …
@@ -227,6 +234,8 @@ Verified `cb_FlagCertificate` conversion in `NewEObezFormU.dfm`
 +      '1 - …'
 +      '2 - …'
 +      '3 - …')
++    ItemIndex = 0
++    Text = '1 - …'                        ← Items[0] — derived from Items.Strings
 +    Properties.OnChange = cb_FlagCertificateChange
 +    TabOrder = 3
 +    Width = 409
@@ -275,8 +284,12 @@ Before finishing, verify:
 - No converted control still has a control-level `OnChange` — it must be
   `Properties.OnChange`.
 - Combo boxes: no `Style = csDropDownList`, no bare `Items.Strings` (must be
-  `Properties.Items.Strings`), no bare `Text = …` line. `ItemIndex` is present and
-  placed **after** `Properties.Items.Strings` (omitted only if original was `-1`).
+  `Properties.Items.Strings`). `ItemIndex` is present and placed **after**
+  `Properties.Items.Strings` (omitted only if original was `-1`); this is mandatory —
+  never drop a non-(-1) `ItemIndex`. When `ItemIndex ≥ 0`, `Text` is present
+  immediately after `ItemIndex` and equals `Items[ItemIndex]` from the original
+  (derived, not copied verbatim from the old `Text` line); `Text` is omitted only when
+  `ItemIndex = -1`.
   Code references `.Items.*` updated to `.Properties.Items.*`.
 - Required units are present in `uses` with no duplicates (`cxMemo` when a memo was
   converted; `cxDBEdit` when any DB control was converted; `cxDropDownEdit` when any
