@@ -1,6 +1,6 @@
 ---
 name: modernize-vcl-date-to-cx
-description: Convert date-edit controls in a Delphi form (.dfm + .pas) to DevExpress (cx) date editors — TJvDateEdit / TDateTimePicker / TRzDateTimeEdit and other unbound date pickers to TcxDateEdit, and TJvDBDateEdit / any data-bound date edit to TcxDBDateEdit — preserving name, position, exact width, tab order, events, dataset and field name. As a follow-up it applies the cx date conventions: set Properties.DateOnError = deNull on the cx editors, and rewrite `.Date = 0` / `.Date <> 0` emptiness checks to NullDate (adding unit cxDateUtils). Use when asked to "modernize", "skin", or convert the date / TJvDateEdit / TDateTimePicker fields of a VCL form, or when modernize-vcl-edit-to-cx defers a date field to this skill.
+description: Convert date-edit controls in a Delphi form (.dfm + .pas) to DevExpress (cx) date editors — TJvDateEdit / TDateTimePicker / TRzDateTimeEdit and other unbound date pickers to TcxDateEdit, and TJvDBDateEdit / any data-bound date edit to TcxDBDateEdit — preserving name, position, exact width, tab order, events, dataset and field name. As a follow-up it applies the cx date conventions: set Properties.DateOnError = deNull on the cx editors, and rewrite every `.Date` usage (reads, writes, and `= 0` / `<> 0` emptiness checks) on a cx editor to the `.DateForStorage` property from ZapiRoutines (which maps empty↔0), never referencing NullDate. Use when asked to "modernize", "skin", or convert the date / TJvDateEdit / TDateTimePicker fields of a VCL form, or when modernize-vcl-edit-to-cx defers a date field to this skill.
 ---
 
 # Modernize VCL date edits → DevExpress (cx) date editors
@@ -149,40 +149,65 @@ alone except the `Height` drop the conversion forces.
    `Properties.OnChange`); do not add, rename, or delete any handler declaration or body.
 3. Ensure the **interface** `uses` clause contains (add any missing, **no duplicates**):
    `cxControls, cxContainer, cxEdit, cxCalendar, cxDropDownEdit`
-   (`TcxDateEdit` and `TcxDBDateEdit` are declared in `cxCalendar`), plus **`cxDateUtils`**
-   for the `NullDate` follow-up below. Forms already partly skinned usually have some of
-   these — adding is then a no-op. Leaving the old `JvToolEdit` / `Vcl.ComCtrls` units is
-   harmless; remove one only if nothing else in the form uses it.
-4. **Migrate or flag source-specific code API.** Most code uses `.Date`, which `TcxDateEdit`
-   also exposes — those calls keep working. But flag/convert any control-specific member the
-   cx editor lacks: `TJvDateEdit.ShowNullDate` / `.Checked`, `TDateTimePicker.DateTime` /
-   `.Time`. (Grep the `.pas` for the converted control names to catch these.)
+   (`TcxDateEdit` and `TcxDBDateEdit` are declared in `cxCalendar`), plus **`ZapiRoutines`**
+   (home of the `DateForStorage` helpers used in the follow-up below — usually added to the
+   *implementation* `uses`, matching the codebase). `cxDateUtils` is **no longer needed for
+   code** — keep it only if already present for another reason. Forms already partly skinned
+   usually have some of these — adding is then a no-op. Leaving the old `JvToolEdit` /
+   `Vcl.ComCtrls` units is harmless; remove one only if nothing else in the form uses it.
+4. **Migrate `.Date`, or flag source-specific API.** Migrate **every** `.Date` read / write /
+   compare on a converted (or already-cx) editor to **`.DateForStorage`** — `.Date` must never
+   remain on a cx editor (see the convention section below). But flag/convert any
+   control-specific member the cx editor lacks: `TJvDateEdit.ShowNullDate` / `.Checked`,
+   `TDateTimePicker.DateTime` / `.Time`. (Grep the `.pas` for the converted control names to
+   catch both.)
 
-## Secondary — the NullDate convention (once a field is cx)
+## Secondary — the DateForStorage convention (once a field is cx)
 
-A cx date editor with `DateOnError = deNull` returns the sentinel **`NullDate`** (from
-`cxDateUtils`) when empty/invalid — **not** `0`. So after a control becomes `TcxDateEdit` /
-`TcxDBDateEdit` (or for any editor that was already cx), rewrite its emptiness checks:
+A cx date editor with `DateOnError = deNull` represents **empty** with the internal sentinel
+`NullDate` (-700000), while the DB / NOI layer uses **`0`**. To bridge the two, this codebase
+gives the cx editors a single `DateForStorage: TDateTime` property (the `TcxDateEditHelper` /
+`TcxDBDateEditHelper` class helpers in **`ZapiRoutines`**) that speaks the storage convention
+(`0` = empty) and hides `NullDate`: reading maps `NullDate`→`0`, writing maps `0`→`NullDate`.
+So once a control is cx (or for any editor that was already cx), **route all date access
+through `DateForStorage`; `.Date` and the `NullDate` constant must never appear in code.**
 
-- `<ctrl>.Date = 0`  → `<ctrl>.Date = NullDate`
-- `<ctrl>.Date <> 0` → `<ctrl>.Date <> NullDate`
-- reversed order (`0 = <ctrl>.Date`) and the cast form
-  `(Control as TcxDateEdit).Date = 0` likewise.
+- emptiness checks: `<ctrl>.Date = 0` → `<ctrl>.DateForStorage = 0`; `<ctrl>.Date <> 0` →
+  `<ctrl>.DateForStorage <> 0` (reversed order and the cast form
+  `(Control as TcxDateEdit).Date = 0` → `(Control as TcxDateEdit).DateForStorage = 0` likewise).
+- reads: `v := <ctrl>.Date` → `v := <ctrl>.DateForStorage`; `f(<ctrl>.Date)` →
+  `f(<ctrl>.DateForStorage)`; field reads `<ctrl>.Date := ds.FieldByName('X').AsDateTime` →
+  `<ctrl>.DateForStorage := ds.FieldByName('X').AsDateTime` (the setter does the 0→empty
+  conversion, so a `FieldDate(...)`-style wrapper is no longer needed — use plain
+  `.AsDateTime`).
+- writes / clears: `ds.FieldByName('X').AsDateTime := <ctrl>.Date` →
+  `:= <ctrl>.DateForStorage`; `<ctrl>.Date := 0` and `<ctrl>.Date := NullDate` →
+  `<ctrl>.DateForStorage := 0`.
+- date-vs-date comparisons among cx controls **are migrated too** (this revises the old
+  "never touch date-vs-date" rule): `edt_X.Date <= edt_Y.Date` →
+  `edt_X.DateForStorage <= edt_Y.DateForStorage`.
+- **var cascade:** when a local/record `TDateTime` is read from an editor and later compared to
+  the empty sentinel, that comparison must follow the storage convention too — after
+  `v := <ctrl>.DateForStorage`, a downstream `if v = NullDate` / `if v <> NullDate` becomes
+  `if v = 0` / `if v <> 0`.
 
 **Only for cx controls.** A still-non-cx date control (`TJvDateEdit`, `TRzDateTimeEdit`,
-`TDateTimePicker`) genuinely returns `0` when empty — leave its `= 0` checks alone. So when
-converting a *subset* of a form's date fields, change only the comparisons whose control you
-actually converted. **Never touch date-vs-date** comparisons (`edt_X.Date <= edt_Y.Date`); in
-a mixed expression change only the `= 0` / `<> 0` operand. Inheritance gotcha: a frame may
-inherit its `edt_*` fields from a base frame — resolve the type where it is declared
-(`TNOIDeathParentFrame` inherits Jv fields from `TNOIBoolFromToDateFrame`).
+`TDateTimePicker`) genuinely returns `0` when empty and has **no** `DateForStorage` helper —
+leave its `.Date` and `= 0` checks **exactly as they are**. So when converting a *subset* of a
+form's date fields, migrate only the access whose control you actually converted; in a mixed
+expression change only the cx operand. **Never write the `NullDate` constant or `.Date =
+NullDate` in code.** Inheritance gotcha: a frame may inherit its `edt_*` fields from a base
+frame — resolve the type where it is declared (`TNOIDeathParentFrame` inherits Jv fields from
+`TNOIBoolFromToDateFrame`, so those stay `.Date = 0`).
 
 ## How to find candidates
 
 ```
 grep -nE 'object \w+: (TJvDateEdit|TJvDBDateEdit|TDateTimePicker|TRzDateTimeEdit)' *.dfm
-grep -nE 'object \w+: (TcxDateEdit|TcxDBDateEdit)' *.dfm   # already-cx (DateOnError + NullDate only)
-grep -nE '\.Date\s*(<>|=)\s*0\b' *.pas                    # emptiness checks for the cx ones
+grep -nE 'object \w+: (TcxDateEdit|TcxDBDateEdit)' *.dfm   # already-cx (DateOnError + DateForStorage only)
+grep -nE '\.Date\s*(<>|=)\s*0\b' *.pas                    # cx-editor emptiness checks → rewrite to .DateForStorage
+grep -nE '<edt>\.Date\b' *.pas                            # per converted control: every .Date access to migrate
+grep -nE 'NullDate' *.pas                                 # guard: should be none on a migrated cx editor
 ```
 
 ## Final self-check & report
@@ -190,7 +215,7 @@ grep -nE '\.Date\s*(<>|=)\s*0\b' *.pas                    # emptiness checks for
 - **In-place diff.** `git diff -- <Form>U.dfm <Form>U.pas`: each converted control is a
   **single in-place hunk** (class + properties change where it sits); no `object` shows up
   removed in one place and re-added elsewhere. `.pas` shows only the field-type change, the
-  `uses` additions, and `0` → `NullDate` swaps.
+  `uses` additions, and `.Date` → `.DateForStorage` swaps.
 - Every `.dfm` `object` has a matching `.pas` field of the same name **and** type, and vice
   versa.
 - No converted control remains `TJvDateEdit` / `TJvDBDateEdit` / `TDateTimePicker` /
@@ -199,11 +224,14 @@ grep -nE '\.Date\s*(<>|=)\s*0\b' *.pas                    # emptiness checks for
   `EditType`. No control-level `OnChange` remains (must be `Properties.OnChange`).
 - Every converted cx editor has exactly one `Properties.DateOnError = deNull` (not
   duplicated); `Width` is last.
-- Re-grep `\.Date\s*(<>|=)\s*0\b`: any remaining hit is a **non-cx** control (not converted
-  this run). Required cx units present in `uses` with no duplicates; `cxDateUtils` present
-  wherever a `NullDate` comparison was written.
+- Re-grep `<edt>\.Date\b` for each converted control: **no cx-editor `.Date` remains** (all
+  migrated to `.DateForStorage`). Re-grep `NullDate`: none on a migrated cx editor (only
+  unrelated internals — XML/parser returns, string literals — may remain). Any remaining
+  `\.Date\s*(<>|=)\s*0\b` hit must be a **non-cx** control (not converted this run). Required
+  cx units present in `uses` with no duplicates, and **`ZapiRoutines`** present (home of
+  `DateForStorage`).
 - **Compile** the form in the Delphi IDE: editors stream (no unknown-property error), and
-  `NullDate` resolves from `cxDateUtils`.
+  `DateForStorage` resolves from `ZapiRoutines`.
 
 Then report: each control converted (old → new type, with name); every dropped property and
 every `Properties.*` move (`OnChange`, `DateOnError`) for the user to verify in the IDE; any
@@ -218,5 +246,8 @@ field **flagged** rather than converted (a `dtkTime` / `etDateTime` time picker)
   `UvedCh123BojoFormU` (`edt_DateNew`).
 - Target shape to copy property style from: `EnterETrudZapFormU.dfm` / `EObezViewerFormU.dfm`
   (cx date editors; the latter has one with an existing `Properties.OnChange`).
-- NullDate follow-up examples (already-cx editors): `EnterETrudZapFormU.pas`,
-  `EObezViewerFormU.pas`, `EnterDopSporFormU.pas` (incl. the `(Control as TcxDateEdit)` cast).
+- `DateForStorage` follow-up examples (already-cx editors): `EnterETrudZapFormU.pas`,
+  `EObezViewerFormU.pas`, `EnterDopSporFormU.pas` (incl. the
+  `(Control as TcxDateEdit).DateForStorage = 0` cast), `Ch222FormU.pas` /
+  `NewPlatOtpFormU.pas` (the `begDate`/`endDate` var cascade). The helpers themselves live in
+  `ZapiRoutines.pas` (`TcxDateEditHelper` / `TcxDBDateEditHelper`).
