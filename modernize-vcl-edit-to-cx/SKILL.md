@@ -208,6 +208,15 @@ converted combo, update to `.Properties.Items.Count`, `.Properties.Items.Add(…
 `.Properties.Items.Clear`. Properties accessed directly (`ItemIndex`, `Visible`,
 `Enabled`, `SetFocus`, `Clear` for text) stay as-is.
 
+**Reading the selected item's text — use `.Text`, never index `Properties.Items`:**
+The old `cb.Items.Strings[cb.ItemIndex]` or `cb.Items[cb.ItemIndex]` must become
+**`cb.Text`**, not `cb.Properties.Items.Strings[cb.ItemIndex]`. Reason: cx's
+`Properties.Items` is a real in-memory `TStrings` that raises
+`'List index out of bounds (-1).'` when `ItemIndex = -1`, whereas the old VCL combo
+silently returned `''`. For a fixed-list combo (`Properties.DropDownListStyle = lsFixedList`,
+which every converted combo uses), `cb.Text` is the selected item's caption and `''`
+when nothing is selected — identical semantics to the old VCL call, with no bounds risk.
+
 ### Combo box before → after — in-place diff
 
 Verified `cb_FlagCertificate` conversion in `NewEObezFormU.dfm`
@@ -291,6 +300,8 @@ Before finishing, verify:
   (derived, not copied verbatim from the old `Text` line); `Text` is omitted only when
   `ItemIndex = -1`.
   Code references `.Items.*` updated to `.Properties.Items.*`.
+  No code reads the selected text as `cb.Properties.Items[cb.ItemIndex]` or
+  `cb.Properties.Items.Strings[cb.ItemIndex]` — those must be `cb.Text` (see above).
 - Required units are present in `uses` with no duplicates (`cxMemo` when a memo was
   converted; `cxDBEdit` when any DB control was converted; `cxDropDownEdit` when any
   `TComboBox` was converted).
